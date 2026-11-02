@@ -1,0 +1,601 @@
+import { asset } from './assets.mjs'
+import { db } from './db.mjs'
+import { html } from './html.mjs'
+import { icon } from './icons.mjs'
+import { deleteImage, MAX_IMAGE_BYTES, picture, saveImage, UserError } from './images.mjs'
+import { isLoggedIn, login, loginBlocked, logout, sessionCookie } from './auth.mjs'
+
+const TYPES = ['บ้าน', 'คาเฟ่', 'รีสอร์ต', 'สำนักงาน']
+const MAX_BODY_BYTES = MAX_IMAGE_BYTES + 1024 * 1024
+const SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Robots-Tag': 'noindex',
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "default-src 'self'; img-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+}
+const FILE_HINT = html`<small>JPG, PNG หรือ WebP ไม่เกิน 8 MB</small>`
+
+function send(res, status, body, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...SECURITY_HEADERS, ...headers })
+  res.end(String(body))
+}
+const redirect = (res, to, headers = {}) => send(res, 303, '', { Location: to, ...headers })
+
+function cookie(req, name) {
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const [key, value] = part.trim().split('=')
+    if (key === name) return value
+  }
+  return undefined
+}
+
+async function readForm(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > MAX_BODY_BYTES) throw new UserError('ไฟล์รูปต้องไม่เกิน 8 MB')
+    chunks.push(chunk)
+  }
+  const form = await new Response(Buffer.concat(chunks), { headers: { 'Content-Type': req.headers['content-type'] || '' } })
+    .formData().catch(() => { throw new UserError('ส่งฟอร์มไม่สำเร็จ กรุณาลองใหม่') })
+  return form
+}
+
+const text = (form, name) => String(form.get(name) ?? '').trim()
+
+function requireText(value, label, max) {
+  if (!value) throw new UserError(`กรุณากรอก${label}`)
+  if (value.length > max) throw new UserError(`${label}ยาวเกิน ${max} ตัวอักษร`)
+  return value
+}
+
+const GROUPS = [
+  { id: 'hero', nav: 'Hero', title: 'รูป Hero หน้าแรก', icon: 'lu-image-play', slots: { hero: 'รูปใหญ่สุดที่ผู้ชมเห็นเป็นรูปแรก', hero_2: 'สไลด์ที่เปลี่ยนต่อจากรูปแรก', hero_3: 'สไลด์สุดท้าย' } },
+  { id: 'about', nav: 'เกี่ยวกับ', title: 'เกี่ยวกับเรา', icon: 'lu-info', slots: { about: 'รูปแนวตั้งข้างข้อความ Welcome to', quote: 'รูปข้างคำคม', feature: 'รูปใหญ่กลางหน้า' } },
+  { id: 'mission', nav: 'พันธกิจ', title: 'พันธกิจ', icon: 'lu-target', slots: { mission_1: 'รูปขวาบนในส่วน MISSION', mission_2: 'รูปซ้ายล่างในส่วน MISSION' } },
+  { id: 'services', nav: 'บริการ', title: 'บริการ', icon: 'lu-leaf', slots: { service_design: 'การ์ดบริการใบที่ 1', service_build: 'การ์ดบริการใบที่ 2', service_care: 'การ์ดบริการใบที่ 3' } },
+  { id: 'brand', nav: 'ทีมงาน', title: 'ทีมงานและโลโก้', icon: 'lu-users', slots: { team: 'รูปในส่วน OUR TEAM', logo: 'โลโก้บนแถบเมนู', og: 'รูปที่ขึ้นตอนแชร์ลิงก์ในโซเชียล' } },
+]
+const groupOfSlot = (key) => GROUPS.find((g) => key in g.slots)
+const NAV = [
+  ['overview', '/admin', 'ภาพรวม', 'lu-layout-dashboard'],
+  ...GROUPS.map((g) => [g.id, `/admin/s/${g.id}`, g.nav, g.icon]),
+  ['projects', '/admin/projects', 'ผลงาน', 'lu-folder-open'],
+  ['contact', '/admin/contact', 'ติดต่อ', 'lu-phone'],
+]
+const IMAGE_TYPES = 'image/jpeg,image/png,image/webp'
+const slotRows = () => Object.fromEntries(db.prepare('SELECT * FROM site_images').all().map((s) => [s.key, s]))
+
+function layout(title, content, { nav = true, saved = false, active = '' } = {}) {
+  return html`<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title} | แอดมิน</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="${asset('admin.css')}">
+  <script src="${asset('admin.js')}" defer></script>
+</head>
+<body class="${nav ? 'shell' : 'bare'}">
+  ${nav && html`<aside class="side">
+    <nav aria-label="เมนูแอดมิน">
+      ${NAV.map(([id, href, label, name]) => html`<a href="${href}" ${id === active && html`class="on" aria-current="page"`}>${icon(name)}${label}</a>`)}
+    </nav>
+    <div class="side-end">
+      <a href="/" target="_blank" rel="noopener">${icon('lu-external-link')}ดูเว็บ</a>
+      <form method="post" action="/admin/logout"><button>${icon('lu-log-out')}ออก</button></form>
+    </div>
+  </aside>`}
+  <main>
+    ${active !== 'overview' && html`<h1>${title}</h1>`}
+    ${saved && html`<p class="notice" role="status">บันทึกแล้ว</p>`}
+    ${content}
+  </main>
+</body>
+</html>`
+}
+
+const errorBox = (error) => error && html`<p class="error" role="alert">${error}</p>`
+const thumb = (name, alt) => html`<img src="${picture(name, alt).src}" alt="${alt}" loading="lazy">`
+
+function loginPage(error) {
+  return layout('เข้าสู่ระบบ', html`
+    ${errorBox(error)}
+    <form class="stack" method="post" action="/admin/login">
+      <label>อีเมล <input type="email" name="email" required autocomplete="username"></label>
+      <label>รหัสผ่าน <input type="password" name="password" required autocomplete="current-password"></label>
+      <button>เข้าสู่ระบบ</button>
+    </form>`, { nav: false })
+}
+
+const changeButton = (slot, label = 'เปลี่ยนรูป') => html`<form method="post" action="/admin/slots/${slot.key}" enctype="multipart/form-data" data-autosubmit>
+  <input type="hidden" name="alt" value="${slot.alt}">
+  <input type="hidden" name="from" value="card">
+  <label class="button">${icon('lu-upload')}${label}<input class="file" type="file" name="image" accept="${IMAGE_TYPES}"></label>
+</form>`
+
+const publishSwitch = (p, next) => html`<form method="post" action="/admin/projects/${p.id}/publish">
+  <input type="hidden" name="next" value="${next}">
+  <button class="switch" role="switch" aria-checked="${p.published ? 'true' : 'false'}" aria-label="แสดง ${p.title} บนเว็บ"><span></span></button>
+</form>`
+
+function projectRows() {
+  return db.prepare(`SELECT p.*, COUNT(i.id) AS photos FROM projects p
+    LEFT JOIN project_images i ON i.project_id = p.id GROUP BY p.id ORDER BY p.sort, p.year DESC`).all()
+}
+
+const SERIES = ['#0f8f5c', '#c9861a', '#3f7fd0']
+
+function donut(parts) {
+  const C = 2 * Math.PI * 54
+  const total = parts.reduce((sum, [, n]) => sum + n, 0)
+  let start = 0
+  return html`<svg class="ring" viewBox="0 0 140 140" role="img" aria-label="${parts.map(([label, n]) => `${label} ${n} รูป`).join(', ')}">
+    ${parts.map(([, n], i) => {
+      const length = total ? (n / total) * C : 0
+      const seg = html`<circle class="ring-part" cx="70" cy="70" r="54" stroke="${SERIES[i]}" stroke-dasharray="${Math.max(0, length - 2)} ${C}" stroke-dashoffset="${-start}" transform="rotate(-90 70 70)"/>`
+      start += length
+      return seg
+    })}
+    <text x="70" y="79" text-anchor="middle">${total}</text>
+  </svg>`
+}
+
+function dashboard(saved) {
+  const slots = slotRows()
+  const projects = projectRows()
+  const shown = projects.filter((p) => p.published).length
+  const photos = projects.reduce((sum, p) => sum + p.photos, 0)
+  const urls = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]))
+  const imageParts = [['ตำแหน่ง', Object.keys(slots).length], ['ปก', projects.length], ['อัลบั้ม', photos]]
+
+  return layout('ภาพรวม', html`<div class="dash">
+    <div class="dash-left">
+      <section class="banner">
+        ${slots.hero && thumb(slots.hero.image, slots.hero.alt)}
+        <div>
+          <h1>ยินดีต้อนรับกลับ, <span>แอดมิน</span></h1>
+          <p>เลือกส่วนของเว็บด้านล่างเพื่อเปลี่ยนรูป หรือเปลี่ยนรูป Hero ได้จากปุ่มนี้</p>
+          ${slots.hero && changeButton(slots.hero, 'เปลี่ยนรูป Hero')}
+        </div>
+      </section>
+      <div class="dash-lower">
+        <section class="rooms">
+          <h2>ส่วนของหน้าเว็บ</h2>
+          <div class="room-grid">
+            ${GROUPS.map((g) => {
+              const first = slots[Object.keys(g.slots)[0]]
+              return html`<a class="room card" href="/admin/s/${g.id}">
+                <strong>${g.title}</strong>
+                ${first && thumb(first.image, '')}
+                <span>${Object.keys(g.slots).length} รูป</span>
+              </a>`
+            })}
+            <a class="room card" href="/admin/contact">
+              <strong>ช่องทางติดต่อ</strong>
+              <b class="room-icon">${icon('lu-phone')}</b>
+              <span>3 ปุ่ม</span>
+            </a>
+          </div>
+        </section>
+        <div class="dash-mid">
+          <section class="devices">
+            <div class="head"><h2>ผลงาน</h2><a href="/admin/projects">ดูทั้งหมด</a></div>
+            <div class="device-grid">
+              ${projects.slice(0, 4).map((p) => html`<article class="device card">
+                <a href="/admin/projects/${p.id}">${p.title}</a>
+                ${publishSwitch(p, 'home')}
+              </article>`)}
+            </div>
+          </section>
+          <section class="scene">
+            <h2>สถานะผลงาน</h2>
+            <div class="card">
+              <div>${icon('lu-external-link')}<strong>${shown}</strong><span>แสดงบนเว็บ</span></div>
+              <div>${icon('lu-folder-open')}<strong>${projects.length - shown}</strong><span>ซ่อนอยู่</span></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-right">
+      <div class="dash-top">
+        <section class="count card">
+          <h2>ผลงานทั้งหมด</h2>
+          <strong>${projects.length}</strong>
+          <span>ชิ้น</span>
+        </section>
+        <section class="people card">
+          <h2>ช่องทางติดต่อ</h2>
+          <div>
+            ${[['line', 'LINE'], ['facebook', 'Facebook'], ['tiktok', 'TikTok']].map(([key, label]) => html`<a class="person" href="/admin/contact"><b class="brand-${key}">${icon(key)}</b>${label}<small>${urls[key] ? 'เปิดอยู่' : 'ซ่อนอยู่'}</small></a>`)}
+            <a class="person" href="/admin/contact"><b>${icon('lu-pencil')}</b>แก้ไข</a>
+          </div>
+        </section>
+      </div>
+      <section class="meters card">
+        <h2>รูปทั้งหมดในเว็บ</h2>
+        ${donut(imageParts)}
+        <ul class="legend legend-row">${imageParts.map(([label, n], i) => html`<li><i class="dot dot-${i}"></i>${label} ${n}</li>`)}</ul>
+      </section>
+      <section class="shortcuts">
+        <h2>ทางลัด</h2>
+        <div>
+          <a href="/admin/projects/new"><b>${icon('lu-plus')}</b>เพิ่มผลงาน</a>
+          <a href="/admin/s/hero"><b>${icon('lu-image-play')}</b>รูป Hero</a>
+          <a href="/admin/contact"><b>${icon('lu-phone')}</b>ติดต่อ</a>
+          <a href="/" target="_blank" rel="noopener"><b>${icon('lu-external-link')}</b>ดูเว็บ</a>
+        </div>
+      </section>
+    </div>
+  </div>`, { saved, active: 'overview' })
+}
+
+function groupPage(group, saved) {
+  const slots = slotRows()
+  const keys = Object.keys(group.slots).filter((key) => slots[key])
+  return layout(group.title, html`<div class="${group.id === 'hero' ? 'slots-hero' : 'slots'}">
+    ${keys.map((key) => html`<article class="slot">
+      <a class="slot-pic" href="/admin/slots/${key}" aria-label="แก้ไข${slots[key].label}">${thumb(slots[key].image, slots[key].alt)}</a>
+      <div class="slot-body">
+        <h2>${slots[key].label}</h2>
+        <p>${group.slots[key]}</p>
+        <div class="slot-actions">${changeButton(slots[key])}<a class="button plain" href="/admin/slots/${key}">${icon('lu-pencil')}แก้คำบรรยาย</a></div>
+      </div>
+    </article>`)}
+  </div>`, { saved, active: group.id })
+}
+
+function projectsPage(saved) {
+  const projects = projectRows()
+  return layout('ผลงาน', html`
+    <div class="head"><p>เปิดสวิตช์เพื่อแสดงผลงานบนเว็บ ปิดเพื่อซ่อน</p><a class="button" href="/admin/projects/new">${icon('lu-plus')}เพิ่มผลงาน</a></div>
+    ${projects.length === 0 && html`<p>ยังไม่มีผลงาน</p>`}
+    <div class="project-grid">
+      ${projects.map((p) => html`<article class="project">
+        <a href="/admin/projects/${p.id}">${thumb(p.cover, p.cover_alt)}</a>
+        <div class="project-body">
+          <a href="/admin/projects/${p.id}">${p.title}</a>
+          <p>${p.type} · ${p.year} · รูปอัลบั้ม ${p.photos} รูป</p>
+        </div>
+        ${publishSwitch(p, 'list')}
+      </article>`)}
+    </div>`, { saved, active: 'projects' })
+}
+
+function contactPage(saved, error) {
+  const urls = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]))
+  return layout('ช่องทางติดต่อ', html`
+    ${errorBox(error)}
+    <form class="stack narrow" method="post" action="/admin/contact">
+      ${[['line', 'LINE'], ['facebook', 'Facebook'], ['tiktok', 'TikTok']].map(([key, label]) => html`<label class="social-field">
+        <span class="brand-${key}">${icon(key)}${label}</span>
+        <input type="url" name="${key}" value="${urls[key]}" placeholder="https://">
+      </label>`)}
+      <small>เว้นว่างเพื่อซ่อนปุ่มนั้นจากหน้าเว็บ</small>
+      <button>บันทึก</button>
+    </form>`, { saved, active: 'contact' })
+}
+
+function slotPage(slot, { error, replaced } = {}) {
+  return layout(slot.label, html`
+    ${errorBox(error)}
+    ${replaced && html`<p class="notice" role="status">เปลี่ยนรูปแล้ว กรุณาตรวจคำบรรยายให้ตรงกับรูปใหม่</p>`}
+    <div class="preview">${thumb(slot.image, slot.alt)}</div>
+    <form class="stack" method="post" enctype="multipart/form-data">
+      <label>เปลี่ยนรูป (ไม่เลือกก็ได้) <input type="file" name="image" accept="${IMAGE_TYPES}"> ${FILE_HINT}</label>
+      <label>คำบรรยายรูป (alt) <input name="alt" value="${slot.alt}" maxlength="160" required></label>
+      <button>บันทึก</button>
+    </form>`, { active: groupOfSlot(slot.key)?.id })
+}
+
+function projectForm(project, { error, saved } = {}) {
+  const isNew = !project.id
+  const album = isNew ? [] : db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY sort, id').all(project.id)
+  return layout(isNew ? 'เพิ่มผลงาน' : project.title, html`
+    ${errorBox(error)}
+    ${!isNew && project.cover && html`<div class="preview">${thumb(project.cover, project.cover_alt)}</div>`}
+    <form class="stack" method="post" enctype="multipart/form-data" action="${isNew ? '/admin/projects' : `/admin/projects/${project.id}`}">
+      <label>ชื่อผลงาน <input name="title" value="${project.title}" maxlength="80" required></label>
+      <label>ชื่อใน URL <input name="slug" value="${project.slug}" maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" required aria-describedby="slug-hint">
+        <small id="slug-hint">ใช้ a-z, 0-9 และขีดกลาง เช่น mae-rim-teak-garden</small></label>
+      <div class="pair">
+        <label>ประเภท <select name="type">${TYPES.map((t) => html`<option ${t === project.type && 'selected'}>${t}</option>`)}</select></label>
+        <label>ปีที่แล้วเสร็จ <input type="number" name="year" value="${project.year}" min="1900" max="2100" required></label>
+      </div>
+      <div class="pair">
+        <label>สถานที่ <input name="location" value="${project.location}" maxlength="80" required></label>
+        <label>พื้นที่ <input name="area" value="${project.area}" maxlength="40" required></label>
+      </div>
+      <label>ข้อมูลร่มเงา <input name="shade" value="${project.shade}" maxlength="60" required></label>
+      <label>คำอธิบายสำหรับ Google <textarea name="summary" rows="2" maxlength="160" required aria-describedby="summary-hint">${project.summary}</textarea>
+        <small id="summary-hint">ไม่เกิน 160 ตัวอักษร</small></label>
+      <label>รายละเอียดงาน <textarea name="body" rows="7" maxlength="3000" required aria-describedby="body-hint">${project.body}</textarea>
+        <small id="body-hint">ขึ้นบรรทัดใหม่เพื่อแบ่งย่อหน้า</small></label>
+      <label>รูปปก ${!isNew && '(ไม่เลือกก็ได้)'} <input type="file" name="cover" accept="image/jpeg,image/png,image/webp" ${isNew && 'required'}> ${FILE_HINT}</label>
+      <label>คำบรรยายรูปปก (alt) <input name="cover_alt" value="${project.cover_alt}" maxlength="160" required></label>
+      <div class="pair">
+        <label>ลำดับบนหน้าเว็บ <input type="number" name="sort" value="${project.sort}" required></label>
+        <label class="check"><input type="checkbox" name="published" ${project.published && 'checked'}> แสดงบนเว็บ</label>
+      </div>
+      <button>บันทึก</button>
+    </form>
+    ${!isNew && html`
+    <section>
+      <h2>อัลบั้มรูป</h2>
+      <ul class="album">
+        ${album.map((r, i) => html`<li>
+          ${thumb(r.image, r.alt)}
+          <form class="inline" method="post" action="/admin/images/${r.id}">
+            <label>คำบรรยายรูป <input name="alt" value="${r.alt}" maxlength="160" required></label>
+            <button>บันทึก</button>
+          </form>
+          <div class="actions">
+            <form method="post" action="/admin/images/${r.id}/move"><input type="hidden" name="by" value="-1"><button class="plain" ${i === 0 && 'disabled'} aria-label="ย้ายรูปขึ้น">ขึ้น</button></form>
+            <form method="post" action="/admin/images/${r.id}/move"><input type="hidden" name="by" value="1"><button class="plain" ${i === album.length - 1 && 'disabled'} aria-label="ย้ายรูปลง">ลง</button></form>
+            <form method="post" action="/admin/images/${r.id}/delete" data-confirm="ลบรูปนี้ถาวร?"><button class="danger">ลบ</button></form>
+          </div>
+        </li>`)}
+      </ul>
+      <form class="stack" method="post" enctype="multipart/form-data" action="/admin/projects/${project.id}/images">
+        <h3>เพิ่มรูป</h3>
+        <label>ไฟล์รูป <input type="file" name="image" accept="image/jpeg,image/png,image/webp" required> ${FILE_HINT}</label>
+        <label>คำบรรยายรูป (alt) <input name="alt" maxlength="160" required></label>
+        <button>เพิ่มรูป</button>
+      </form>
+    </section>
+    <section>
+      <h2>ลบผลงาน</h2>
+      <form method="post" action="/admin/projects/${project.id}/delete" data-confirm="ลบผลงานนี้และรูปทั้งหมดถาวร?"><button class="danger">ลบผลงานนี้</button></form>
+    </section>`}`, { saved, active: 'projects' })
+}
+
+const EMPTY_PROJECT = { title: '', slug: '', type: TYPES[0], location: '', year: new Date().getFullYear(), area: '', shade: '', summary: '', body: '', cover_alt: '', published: 0, sort: 0 }
+
+function readProjectFields(form) {
+  const year = Number(text(form, 'year'))
+  const sort = Number(text(form, 'sort'))
+  const fields = {
+    title: text(form, 'title'), slug: text(form, 'slug'), type: text(form, 'type'), location: text(form, 'location'),
+    year, area: text(form, 'area'), shade: text(form, 'shade'), summary: text(form, 'summary'), body: text(form, 'body'),
+    cover_alt: text(form, 'cover_alt'), published: form.get('published') ? 1 : 0, sort,
+  }
+  return fields
+}
+
+function validateProject(f) {
+  requireText(f.title, 'ชื่อผลงาน', 80)
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(f.slug)) throw new UserError('ชื่อใน URL ใช้ได้เฉพาะ a-z, 0-9 และขีดกลาง')
+  if (!TYPES.includes(f.type)) throw new UserError('ประเภทไม่ถูกต้อง')
+  if (!Number.isInteger(f.year) || f.year < 1900 || f.year > 2100) throw new UserError('ปีไม่ถูกต้อง')
+  if (!Number.isInteger(f.sort)) throw new UserError('ลำดับต้องเป็นตัวเลข')
+  requireText(f.location, 'สถานที่', 80)
+  requireText(f.area, 'พื้นที่', 40)
+  requireText(f.shade, 'ข้อมูลร่มเงา', 60)
+  requireText(f.summary, 'คำอธิบายสำหรับ Google', 160)
+  requireText(f.body, 'รายละเอียดงาน', 3000)
+  requireText(f.cover_alt, 'คำบรรยายรูปปก', 160)
+  const other = db.prepare('SELECT id FROM projects WHERE slug = ?').get(f.slug)
+  if (other && other.id !== f.id) throw new UserError('ชื่อใน URL นี้ถูกใช้แล้ว')
+}
+
+async function saveProject(id, form) {
+  const existing = id ? db.prepare('SELECT * FROM projects WHERE id = ?').get(id) : null
+  const fields = { ...readProjectFields(form), id }
+  try {
+    validateProject(fields)
+    const file = form.get('cover')
+    const hasFile = file && typeof file !== 'string' && file.size > 0
+    const cover = hasFile || !existing ? await saveImage(file, fields.slug) : existing.cover
+    const { id: _, ...values } = { ...fields, cover }
+    const names = Object.keys(values)
+    let projectId = id
+    if (existing) {
+      db.prepare(`UPDATE projects SET ${names.map((n) => `${n} = ?`).join(', ')}, updated_at = date('now') WHERE id = ?`)
+        .run(...Object.values(values), id)
+      if (cover !== existing.cover) await deleteImage(existing.cover)
+    } else {
+      projectId = db.prepare(`INSERT INTO projects (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`)
+        .run(...Object.values(values)).lastInsertRowid
+    }
+    return { projectId }
+  } catch (error) {
+    if (!(error instanceof UserError)) throw error
+    return { error: error.message, fields: { ...existing, ...fields } }
+  }
+}
+
+const touchProject = (id) => db.prepare("UPDATE projects SET updated_at = date('now') WHERE id = ?").run(id)
+
+async function postRoutes(req, res, path, form) {
+  let m
+  if ((m = path.match(/^\/admin\/slots\/([a-z0-9_]+)$/))) {
+    const slot = db.prepare('SELECT * FROM site_images WHERE key = ?').get(m[1])
+    if (!slot) return false
+    try {
+      const alt = requireText(text(form, 'alt'), 'คำบรรยายรูป', 160)
+      const file = form.get('image')
+      const image = file && typeof file !== 'string' && file.size > 0 ? await saveImage(file, slot.key) : slot.image
+      db.prepare('UPDATE site_images SET image = ?, alt = ? WHERE key = ?').run(image, alt, slot.key)
+      if (image !== slot.image) await deleteImage(slot.image)
+      redirect(res, text(form, 'from') === 'card' ? `/admin/slots/${slot.key}?replaced=1` : `/admin/s/${groupOfSlot(slot.key)?.id}?saved=1`)
+    } catch (error) {
+      if (!(error instanceof UserError)) throw error
+      send(res, 400, slotPage(slot, { error: error.message }))
+    }
+    return true
+  }
+
+  if (path === '/admin/contact') {
+    const save = db.prepare('UPDATE settings SET value = ? WHERE key = ?')
+    const urls = ['line', 'facebook', 'tiktok'].map((key) => [key, text(form, key)])
+    for (const [, value] of urls) {
+      if (value && !URL.parse(value)?.protocol?.startsWith('https')) { send(res, 400, contactPage(false, 'ลิงก์ต้องขึ้นต้นด้วย https://')); return true }
+    }
+    for (const [key, value] of urls) save.run(value, key)
+    redirect(res, '/admin/contact?saved=1')
+    return true
+  }
+
+  if (path === '/admin/projects') {
+    const result = await saveProject(null, form)
+    if (result.error) send(res, 400, projectForm(result.fields, { error: result.error }))
+    else redirect(res, `/admin/projects/${result.projectId}?saved=1`)
+    return true
+  }
+
+  if ((m = path.match(/^\/admin\/projects\/(\d+)$/))) {
+    const id = Number(m[1])
+    if (!db.prepare('SELECT 1 FROM projects WHERE id = ?').get(id)) return false
+    const result = await saveProject(id, form)
+    if (result.error) send(res, 400, projectForm(result.fields, { error: result.error }))
+    else redirect(res, `/admin/projects/${id}?saved=1`)
+    return true
+  }
+
+  if ((m = path.match(/^\/admin\/projects\/(\d+)\/publish$/))) {
+    const id = Number(m[1])
+    if (!db.prepare('SELECT 1 FROM projects WHERE id = ?').get(id)) return false
+    db.prepare("UPDATE projects SET published = 1 - published, updated_at = date('now') WHERE id = ?").run(id)
+    redirect(res, text(form, 'next') === 'home' ? '/admin?saved=1' : '/admin/projects?saved=1')
+    return true
+  }
+
+  if ((m = path.match(/^\/admin\/projects\/(\d+)\/delete$/))) {
+    const id = Number(m[1])
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
+    if (!project) return false
+    const album = db.prepare('SELECT image FROM project_images WHERE project_id = ?').all(id)
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+    await Promise.all([project.cover, ...album.map((r) => r.image)].map(deleteImage))
+    redirect(res, '/admin/projects?saved=1')
+    return true
+  }
+
+  if ((m = path.match(/^\/admin\/projects\/(\d+)\/images$/))) {
+    const id = Number(m[1])
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
+    if (!project) return false
+    try {
+      const alt = requireText(text(form, 'alt'), 'คำบรรยายรูป', 160)
+      const image = await saveImage(form.get('image'), project.slug)
+      db.prepare(`INSERT INTO project_images (project_id, image, alt, sort)
+        VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM project_images WHERE project_id = ?))`).run(id, image, alt, id)
+      touchProject(id)
+      redirect(res, `/admin/projects/${id}?saved=1`)
+    } catch (error) {
+      if (!(error instanceof UserError)) throw error
+      send(res, 400, projectForm(project, { error: error.message }))
+    }
+    return true
+  }
+
+  if ((m = path.match(/^\/admin\/images\/(\d+)(\/delete|\/move)?$/))) {
+    const row = db.prepare('SELECT * FROM project_images WHERE id = ?').get(Number(m[1]))
+    if (!row) return false
+    if (m[2] === '/delete') {
+      db.prepare('DELETE FROM project_images WHERE id = ?').run(row.id)
+      await deleteImage(row.image)
+    } else if (m[2] === '/move') {
+      const album = db.prepare('SELECT id FROM project_images WHERE project_id = ? ORDER BY sort, id').all(row.project_id)
+      const from = album.findIndex((r) => r.id === row.id)
+      const to = from + (text(form, 'by') === '-1' ? -1 : 1)
+      if (album[to]) {
+        ;[album[from], album[to]] = [album[to], album[from]]
+        const update = db.prepare('UPDATE project_images SET sort = ? WHERE id = ?')
+        album.forEach((r, i) => update.run(i + 1, r.id))
+      }
+    } else {
+      const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id)
+      const alt = text(form, 'alt')
+      if (!alt || alt.length > 160) { send(res, 400, projectForm(project, { error: 'กรุณากรอกคำบรรยายรูป ไม่เกิน 160 ตัวอักษร' })); return true }
+      db.prepare('UPDATE project_images SET alt = ? WHERE id = ?').run(alt, row.id)
+    }
+    touchProject(row.project_id)
+    redirect(res, `/admin/projects/${row.project_id}?saved=1`)
+    return true
+  }
+  return false
+}
+
+function getRoutes(res, path, saved, replaced) {
+  let m
+  if (path === '/admin') { send(res, 200, dashboard(saved)); return true }
+  if (path === '/admin/projects') { send(res, 200, projectsPage(saved)); return true }
+  if (path === '/admin/contact') { send(res, 200, contactPage(saved)); return true }
+  if ((m = path.match(/^\/admin\/s\/([a-z]+)$/))) {
+    const group = GROUPS.find((g) => g.id === m[1])
+    if (!group) return false
+    send(res, 200, groupPage(group, saved))
+    return true
+  }
+  if (path === '/admin/projects/new') { send(res, 200, projectForm(EMPTY_PROJECT)); return true }
+  if ((m = path.match(/^\/admin\/projects\/(\d+)$/))) {
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(m[1]))
+    if (!project) return false
+    send(res, 200, projectForm(project, { saved }))
+    return true
+  }
+  if ((m = path.match(/^\/admin\/slots\/([a-z0-9_]+)$/))) {
+    const slot = db.prepare('SELECT * FROM site_images WHERE key = ?').get(m[1])
+    if (!slot) return false
+    send(res, 200, slotPage(slot, { replaced }))
+    return true
+  }
+  return false
+}
+
+// Returns false when no admin route matches, so the caller can answer 404.
+export async function handleAdmin(req, res, url) {
+  const path = url.pathname
+  const token = cookie(req, 'sid')
+
+  if (req.method === 'POST') {
+    // SameSite=Strict already blocks forged posts in browsers; this also covers older clients.
+    const origin = req.headers.origin
+    if (origin && new URL(origin).host !== req.headers.host) { send(res, 403, 'ปฏิเสธคำขอจากเว็บอื่น'); return true }
+  }
+
+  if (path === '/admin/login') {
+    if (req.method === 'GET') {
+      if (isLoggedIn(token)) redirect(res, '/admin')
+      else send(res, 200, loginPage())
+      return true
+    }
+    if (req.method !== 'POST') return false
+    const ip = req.socket.remoteAddress
+    if (loginBlocked(ip)) { send(res, 429, loginPage('ลองเข้าสู่ระบบผิดหลายครั้ง กรุณารอ 15 นาที')); return true }
+    const form = await readForm(req)
+    const session = await login(text(form, 'email'), String(form.get('password') ?? ''), ip)
+    if (session) redirect(res, '/admin', { 'Set-Cookie': sessionCookie(session) })
+    else send(res, 401, loginPage('อีเมลหรือรหัสผ่านไม่ถูกต้อง'))
+    return true
+  }
+
+  if (!isLoggedIn(token)) {
+    req.resume()
+    redirect(res, '/admin/login')
+    return true
+  }
+
+  if (req.method === 'GET') return getRoutes(res, path, url.searchParams.has('saved'), url.searchParams.has('replaced'))
+  if (req.method !== 'POST') return false
+
+  if (path === '/admin/logout') {
+    req.resume()
+    logout(token)
+    redirect(res, '/admin/login', { 'Set-Cookie': sessionCookie('', 0) })
+    return true
+  }
+  try {
+    return await postRoutes(req, res, path, await readForm(req))
+  } catch (error) {
+    if (!(error instanceof UserError)) throw error
+    send(res, 400, layout('บันทึกไม่สำเร็จ', html`${errorBox(error.message)}<a href="/admin">กลับหน้าจัดการ</a>`))
+    return true
+  }
+}

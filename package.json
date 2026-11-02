@@ -1,0 +1,17 @@
+{
+  "name": "ngaomai-garden",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "seed": "node --env-file-if-exists=.env seed/seed.mjs",
+    "admin": "node --env-file-if-exists=.env scripts/admin.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "sharp": "^0.35.5"
+  }
+}
