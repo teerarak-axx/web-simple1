@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ngaomai-garden
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    # Free instances lose data/ on every restart, so seed and the admin login are redone at start.
+    startCommand: npm run render-start
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: HOST
+        value: 0.0.0.0
+      - key: SITE_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

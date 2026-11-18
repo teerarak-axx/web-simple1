@@ -23,3 +23,8 @@ for (const form of document.querySelectorAll('form[data-autosubmit]')) {
     form.submit()
   })
 }
+
+// On a narrow screen the bottom menu scrolls sideways: bring the current page's button into view
+if (matchMedia('(max-width: 760px)').matches) {
+  document.querySelector('.side a.on')?.scrollIntoView({ inline: 'center', block: 'nearest' })
+}

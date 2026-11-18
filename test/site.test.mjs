@@ -174,6 +174,13 @@ test('dashboard pages open and the publish switch hides a project', async () => 
   await post(`${adminPath}/delete`)
 })
 
+test('mobile admin menu scrolls the current button into view and shows edge fades', async () => {
+  const page = await (await get('/admin/contact', { Cookie: `sid=${sid}` })).text()
+  assert.match(page, /<a href="\/admin\/contact" class="on" aria-current="page"/)
+  assert.match(await (await get('/assets/admin.js')).text(), /\.side a\.on'\)\?\.scrollIntoView/)
+  assert.match(await (await get('/assets/admin.css')).text(), /no-repeat local/)
+})
+
 test('assets revalidate so an update reaches returning visitors', async () => {
   const first = await get('/assets/site.css')
   assert.equal(first.headers.get('cache-control'), 'no-cache')

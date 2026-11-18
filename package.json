@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=.env server.mjs",
     "seed": "node --env-file-if-exists=.env seed/seed.mjs",
     "admin": "node --env-file-if-exists=.env scripts/admin.mjs",
+    "render-start": "npm run seed || true; npm run admin && npm start",
     "test": "node --test"
   },
   "dependencies": {
