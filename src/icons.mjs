@@ -4,7 +4,8 @@ import { raw } from './html.mjs'
 
 const cache = new Map()
 
-// Brand marks are from simple-icons (CC0), interface icons from lucide (ISC).
+// Brand marks are from simple-icons (CC0), admin interface icons from Phosphor Icons (MIT, regular weight), and the
+// public site's phone and mail icons (lu-*) from lucide (ISC).
 export function icon(name) {
   if (!cache.has(name)) {
     let svg = readFileSync(join(import.meta.dirname, 'icons', `${name}.svg`), 'utf8')

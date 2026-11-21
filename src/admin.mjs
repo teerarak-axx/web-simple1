@@ -3,11 +3,11 @@ import { db } from './db.mjs'
 import { html } from './html.mjs'
 import { icon } from './icons.mjs'
 import { deleteImage, MAX_IMAGE_BYTES, picture, saveImage, UserError } from './images.mjs'
-import { isLoggedIn, login, loginBlocked, logout, sessionCookie } from './auth.mjs'
+import { clientIp, isLoggedIn, login, loginBlocked, logout, sessionCookie } from './auth.mjs'
 
 const TYPES = ['บ้าน', 'คาเฟ่', 'รีสอร์ต', 'สำนักงาน']
 const MAX_BODY_BYTES = MAX_IMAGE_BYTES + 1024 * 1024
-const SECURITY_HEADERS = {
+export const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Robots-Tag': 'noindex',
   'X-Frame-Options': 'DENY',
@@ -51,23 +51,23 @@ function requireText(value, label, max) {
 }
 
 const GROUPS = [
-  { id: 'hero', nav: 'Hero', title: 'รูป Hero หน้าแรก', icon: 'lu-image-play', slots: { hero: 'รูปใหญ่สุดที่ผู้ชมเห็นเป็นรูปแรก', hero_2: 'สไลด์ที่เปลี่ยนต่อจากรูปแรก', hero_3: 'สไลด์สุดท้าย' } },
-  { id: 'about', nav: 'เกี่ยวกับ', title: 'เกี่ยวกับเรา', icon: 'lu-info', slots: { about: 'รูปแนวตั้งข้างข้อความ Welcome to', quote: 'รูปข้างคำคม', feature: 'รูปใหญ่กลางหน้า' } },
-  { id: 'mission', nav: 'พันธกิจ', title: 'พันธกิจ', icon: 'lu-target', slots: { mission_1: 'รูปขวาบนในส่วน MISSION', mission_2: 'รูปซ้ายล่างในส่วน MISSION' } },
-  { id: 'services', nav: 'บริการ', title: 'บริการ', icon: 'lu-leaf', slots: { service_design: 'การ์ดบริการใบที่ 1', service_build: 'การ์ดบริการใบที่ 2', service_care: 'การ์ดบริการใบที่ 3' } },
-  { id: 'brand', nav: 'ทีมงาน', title: 'ทีมงานและโลโก้', icon: 'lu-users', slots: { team: 'รูปในส่วน OUR TEAM', logo: 'โลโก้บนแถบเมนู', og: 'รูปที่ขึ้นตอนแชร์ลิงก์ในโซเชียล' } },
+  { id: 'hero', nav: 'Hero', title: 'รูป Hero หน้าแรก', icon: 'ph-images', slots: { hero: 'รูปใหญ่สุดที่ผู้ชมเห็นเป็นรูปแรก', hero_2: 'สไลด์ที่เปลี่ยนต่อจากรูปแรก', hero_3: 'สไลด์สุดท้าย' } },
+  { id: 'about', nav: 'เกี่ยวกับ', title: 'เกี่ยวกับเรา', icon: 'ph-info', slots: { about: 'รูปแนวตั้งข้างข้อความ Welcome to', quote: 'รูปข้างคำคม', feature: 'รูปใหญ่กลางหน้า' } },
+  { id: 'mission', nav: 'พันธกิจ', title: 'พันธกิจ', icon: 'ph-target', slots: { mission_1: 'รูปขวาบนในส่วน MISSION', mission_2: 'รูปซ้ายล่างในส่วน MISSION' } },
+  { id: 'services', nav: 'บริการ', title: 'บริการ', icon: 'ph-leaf', slots: { service_design: 'การ์ดบริการใบที่ 1', service_build: 'การ์ดบริการใบที่ 2', service_care: 'การ์ดบริการใบที่ 3' } },
+  { id: 'brand', nav: 'ทีมงาน', title: 'ทีมงานและโลโก้', icon: 'ph-users-three', slots: { team: 'รูปในส่วน OUR TEAM', logo: 'โลโก้บนแถบเมนู', og: 'รูปที่ขึ้นตอนแชร์ลิงก์ในโซเชียล' } },
 ]
 const groupOfSlot = (key) => GROUPS.find((g) => key in g.slots)
+// Sidebar sections: a grey heading, then one row per page as [id, href, label, icon]
 const NAV = [
-  ['overview', '/admin', 'ภาพรวม', 'lu-layout-dashboard'],
-  ...GROUPS.map((g) => [g.id, `/admin/s/${g.id}`, g.nav, g.icon]),
-  ['projects', '/admin/projects', 'ผลงาน', 'lu-folder-open'],
-  ['contact', '/admin/contact', 'ติดต่อ', 'lu-phone'],
+  ['หลัก', [['overview', '/admin', 'ภาพรวม', 'ph-squares-four']]],
+  ['เนื้อหาเว็บ', GROUPS.map((g) => [g.id, `/admin/s/${g.id}`, g.nav, g.icon])],
+  ['จัดการ', [['projects', '/admin/projects', 'ผลงาน', 'ph-folder-open'], ['contact', '/admin/contact', 'ติดต่อ', 'ph-phone']]],
 ]
 const IMAGE_TYPES = 'image/jpeg,image/png,image/webp'
 const slotRows = () => Object.fromEntries(db.prepare('SELECT * FROM site_images').all().map((s) => [s.key, s]))
 
-function layout(title, content, { nav = true, saved = false, active = '' } = {}) {
+function layout(title, content, { nav = true, saved = false, active = '', sub = '', actions = '' } = {}) {
   return html`<!doctype html>
 <html lang="th">
 <head>
@@ -75,23 +75,30 @@ function layout(title, content, { nav = true, saved = false, active = '' } = {})
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} | แอดมิน</title>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=K2D:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="${asset('theme.js')}"></script>
   <link rel="stylesheet" href="${asset('admin.css')}">
   <script src="${asset('admin.js')}" defer></script>
 </head>
 <body class="${nav ? 'shell' : 'bare'}">
   ${nav && html`<aside class="side">
     <nav aria-label="เมนูแอดมิน">
-      ${NAV.map(([id, href, label, name]) => html`<a href="${href}" ${id === active && html`class="on" aria-current="page"`}>${icon(name)}${label}</a>`)}
+      ${NAV.map(([heading, items]) => html`<p class="side-h">${heading}</p>
+      ${items.map(([id, href, label, name]) => html`<a href="${href}" ${id === active && html`class="on" aria-current="page"`}>${icon(name)}${label}</a>`)}`)}
     </nav>
     <div class="side-end">
-      <a href="/" target="_blank" rel="noopener">${icon('lu-external-link')}ดูเว็บ</a>
-      <form method="post" action="/admin/logout"><button>${icon('lu-log-out')}ออก</button></form>
+      <p class="side-h">ระบบ</p>
+      <button class="theme-toggle" type="button" aria-label="สลับโหมดมืด" aria-pressed="false">${icon('ph-moon')}${icon('ph-sun')}โหมดมืด</button>
+      <a href="/" target="_blank" rel="noopener">${icon('ph-arrow-square-out')}ดูเว็บ</a>
+      <form method="post" action="/admin/logout"><button>${icon('ph-sign-out')}ออก</button></form>
     </div>
   </aside>`}
   <main>
-    ${active !== 'overview' && html`<h1>${title}</h1>`}
-    ${saved && html`<p class="notice" role="status">บันทึกแล้ว</p>`}
+    <header class="head page-head">
+      <div><h1>${title}</h1>${sub && html`<p>${sub}</p>`}</div>
+      ${actions && html`<div class="head-actions">${actions}</div>`}
+    </header>
+    ${saved && html`<p class="notice toast" role="status">บันทึกแล้ว</p>`}
     ${content}
   </main>
 </body>
@@ -101,11 +108,11 @@ function layout(title, content, { nav = true, saved = false, active = '' } = {})
 const errorBox = (error) => error && html`<p class="error" role="alert">${error}</p>`
 const thumb = (name, alt) => html`<img src="${picture(name, alt).src}" alt="${alt}" loading="lazy">`
 
-function loginPage(error) {
+function loginPage(error, email = '') {
   return layout('เข้าสู่ระบบ', html`
     ${errorBox(error)}
     <form class="stack" method="post" action="/admin/login">
-      <label>อีเมล <input type="email" name="email" required autocomplete="username"></label>
+      <label>อีเมล <input type="email" name="email" value="${email}" required autocomplete="username"></label>
       <label>รหัสผ่าน <input type="password" name="password" required autocomplete="current-password"></label>
       <button>เข้าสู่ระบบ</button>
     </form>`, { nav: false })
@@ -114,7 +121,7 @@ function loginPage(error) {
 const changeButton = (slot, label = 'เปลี่ยนรูป') => html`<form method="post" action="/admin/slots/${slot.key}" enctype="multipart/form-data" data-autosubmit>
   <input type="hidden" name="alt" value="${slot.alt}">
   <input type="hidden" name="from" value="card">
-  <label class="button">${icon('lu-upload')}${label}<input class="file" type="file" name="image" accept="${IMAGE_TYPES}"></label>
+  <label class="button tonal">${icon('ph-upload-simple')}${label}<input class="file" type="file" name="image" accept="${IMAGE_TYPES}"></label>
 </form>`
 
 const publishSwitch = (p, next) => html`<form method="post" action="/admin/projects/${p.id}/publish">
@@ -127,22 +134,24 @@ function projectRows() {
     LEFT JOIN project_images i ON i.project_id = p.id GROUP BY p.id ORDER BY p.sort, p.year DESC`).all()
 }
 
-const SERIES = ['#0f8f5c', '#c9861a', '#3f7fd0']
+const SOCIALS = [['line', 'LINE'], ['facebook', 'Facebook'], ['tiktok', 'TikTok']]
+// The project page lays the album out two to a row; six photos fill three rows.
+const ALBUM_TARGET = 6
 
-function donut(parts) {
-  const C = 2 * Math.PI * 54
-  const total = parts.reduce((sum, [, n]) => sum + n, 0)
-  let start = 0
-  return html`<svg class="ring" viewBox="0 0 140 140" role="img" aria-label="${parts.map(([label, n]) => `${label} ${n} รูป`).join(', ')}">
-    ${parts.map(([, n], i) => {
-      const length = total ? (n / total) * C : 0
-      const seg = html`<circle class="ring-part" cx="70" cy="70" r="54" stroke="${SERIES[i]}" stroke-dasharray="${Math.max(0, length - 2)} ${C}" stroke-dashoffset="${-start}" transform="rotate(-90 70 70)"/>`
-      start += length
-      return seg
-    })}
-    <text x="70" y="79" text-anchor="middle">${total}</text>
+function albumRing(photos) {
+  const done = Math.min(photos, ALBUM_TARGET)
+  return html`<svg class="pring" viewBox="0 0 40 40" role="img" aria-label="รูปอัลบั้ม ${photos} จาก ${ALBUM_TARGET} รูปที่แนะนำ">
+    <circle class="pring-track" cx="20" cy="20" r="16"/>
+    <circle class="pring-bar" cx="20" cy="20" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="${100 - Math.round((done / ALBUM_TARGET) * 100)}" transform="rotate(-90 20 20)"/>
+    <text x="20" y="24.5" text-anchor="middle">${photos}</text>
   </svg>`
 }
+
+const kpi = (name, label, n, of = '') => html`<div class="kpi card">
+  <b class="chip">${icon(name)}</b>
+  <span>${label}</span>
+  <p><strong data-count="${n}">${n}</strong>${of && html`<small>${of}</small>`}</p>
+</div>`
 
 function dashboard(saved) {
   const slots = slotRows()
@@ -150,113 +159,98 @@ function dashboard(saved) {
   const shown = projects.filter((p) => p.published).length
   const photos = projects.reduce((sum, p) => sum + p.photos, 0)
   const urls = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]))
-  const imageParts = [['ตำแหน่ง', Object.keys(slots).length], ['ปก', projects.length], ['อัลบั้ม', photos]]
+  const links = SOCIALS.filter(([key]) => urls[key]).length
 
-  return layout('ภาพรวม', html`<div class="dash">
-    <div class="dash-left">
-      <section class="banner">
-        ${slots.hero && thumb(slots.hero.image, slots.hero.alt)}
-        <div>
-          <h1>ยินดีต้อนรับกลับ, <span>แอดมิน</span></h1>
-          <p>เลือกส่วนของเว็บด้านล่างเพื่อเปลี่ยนรูป หรือเปลี่ยนรูป Hero ได้จากปุ่มนี้</p>
-          ${slots.hero && changeButton(slots.hero, 'เปลี่ยนรูป Hero')}
-        </div>
-      </section>
-      <div class="dash-lower">
-        <section class="rooms">
-          <h2>ส่วนของหน้าเว็บ</h2>
-          <div class="room-grid">
-            ${GROUPS.map((g) => {
-              const first = slots[Object.keys(g.slots)[0]]
-              return html`<a class="room card" href="/admin/s/${g.id}">
-                <strong>${g.title}</strong>
-                ${first && thumb(first.image, '')}
-                <span>${Object.keys(g.slots).length} รูป</span>
-              </a>`
-            })}
-            <a class="room card" href="/admin/contact">
-              <strong>ช่องทางติดต่อ</strong>
-              <b class="room-icon">${icon('lu-phone')}</b>
-              <span>3 ปุ่ม</span>
-            </a>
-          </div>
-        </section>
-        <div class="dash-mid">
-          <section class="devices">
-            <div class="head"><h2>ผลงาน</h2><a href="/admin/projects">ดูทั้งหมด</a></div>
-            <div class="device-grid">
-              ${projects.slice(0, 4).map((p) => html`<article class="device card">
-                <a href="/admin/projects/${p.id}">${p.title}</a>
-                ${publishSwitch(p, 'home')}
-              </article>`)}
-            </div>
-          </section>
-          <section class="scene">
-            <h2>สถานะผลงาน</h2>
-            <div class="card">
-              <div>${icon('lu-external-link')}<strong>${shown}</strong><span>แสดงบนเว็บ</span></div>
-              <div>${icon('lu-folder-open')}<strong>${projects.length - shown}</strong><span>ซ่อนอยู่</span></div>
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
+  return layout('ภาพรวม', html`
+    <section class="kpis" aria-label="สรุป">
+      ${kpi('ph-folder-open', 'ผลงานทั้งหมด', projects.length)}
+      ${kpi('ph-arrow-square-out', 'แสดงบนเว็บ', shown)}
+      ${kpi('ph-images', 'รูปทั้งหมด', Object.keys(slots).length + projects.length + photos)}
+      ${kpi('ph-phone', 'ช่องทางติดต่อ', links, ` / ${SOCIALS.length}`)}
+    </section>
 
-    <div class="dash-right">
-      <div class="dash-top">
-        <section class="count card">
-          <h2>ผลงานทั้งหมด</h2>
-          <strong>${projects.length}</strong>
-          <span>ชิ้น</span>
-        </section>
-        <section class="people card">
-          <h2>ช่องทางติดต่อ</h2>
-          <div>
-            ${[['line', 'LINE'], ['facebook', 'Facebook'], ['tiktok', 'TikTok']].map(([key, label]) => html`<a class="person" href="/admin/contact"><b class="brand-${key}">${icon(key)}</b>${label}<small>${urls[key] ? 'เปิดอยู่' : 'ซ่อนอยู่'}</small></a>`)}
-            <a class="person" href="/admin/contact"><b>${icon('lu-pencil')}</b>แก้ไข</a>
+    <section>
+      <div class="sec-head"><h2>ผลงาน</h2><a href="/admin/projects">ดูทั้งหมด</a></div>
+      ${projects.length === 0 && html`<p class="empty card">ยังไม่มีผลงาน กดปุ่ม “เพิ่มผลงาน” ด้านบนเพื่อเริ่ม</p>`}
+      <div class="cards">
+        ${projects.slice(0, 8).map((p) => html`<article class="pcard card lift">
+          ${thumb(p.cover, '')}
+          <div class="pcard-body">
+            <div class="pcard-top">
+              <div>
+                <h3><a class="stretch" href="/admin/projects/${p.id}">${p.title}</a></h3>
+                <p class="loc">${icon('ph-map-pin')}${p.location}</p>
+              </div>
+              ${albumRing(p.photos)}
+            </div>
+            <ul class="pills">
+              <li>ปี ${p.year}</li>
+              <li>${p.type}</li>
+              <li>${p.photos} รูป</li>
+            </ul>
+            <div class="pcard-foot">
+              <span>${p.published ? 'แสดงบนเว็บ' : 'ซ่อนอยู่'}</span>
+              ${publishSwitch(p, 'home')}
+            </div>
           </div>
-        </section>
+        </article>`)}
       </div>
-      <section class="meters card">
-        <h2>รูปทั้งหมดในเว็บ</h2>
-        ${donut(imageParts)}
-        <ul class="legend legend-row">${imageParts.map(([label, n], i) => html`<li><i class="dot dot-${i}"></i>${label} ${n}</li>`)}</ul>
-      </section>
-      <section class="shortcuts">
-        <h2>ทางลัด</h2>
-        <div>
-          <a href="/admin/projects/new"><b>${icon('lu-plus')}</b>เพิ่มผลงาน</a>
-          <a href="/admin/s/hero"><b>${icon('lu-image-play')}</b>รูป Hero</a>
-          <a href="/admin/contact"><b>${icon('lu-phone')}</b>ติดต่อ</a>
-          <a href="/" target="_blank" rel="noopener"><b>${icon('lu-external-link')}</b>ดูเว็บ</a>
-        </div>
-      </section>
-    </div>
-  </div>`, { saved, active: 'overview' })
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>ส่วนของหน้าเว็บ</h2></div>
+      <div class="cards">
+        ${GROUPS.map((g) => {
+          const first = slots[Object.keys(g.slots)[0]]
+          return html`<article class="scard card lift">
+            ${first ? thumb(first.image, '') : html`<b class="scard-icon">${icon(g.icon)}</b>`}
+            <div class="scard-body">
+              <h3><a class="stretch" href="/admin/s/${g.id}">${g.title}</a></h3>
+              <p>${Object.keys(g.slots).length} รูป</p>
+              ${g.id === 'hero' && slots.hero && changeButton(slots.hero, 'เปลี่ยนรูป Hero')}
+              <div class="scard-foot"><span class="more">จัดการ ›</span></div>
+            </div>
+          </article>`
+        })}
+        <article class="scard card lift">
+          <b class="scard-icon">${icon('ph-phone')}</b>
+          <div class="scard-body">
+            <h3><a class="stretch" href="/admin/contact">ช่องทางติดต่อ</a></h3>
+            <p>เปิดอยู่ ${links} จาก ${SOCIALS.length} ปุ่ม</p>
+            <div class="scard-foot"><span class="more">จัดการ ›</span></div>
+          </div>
+        </article>
+      </div>
+    </section>`, {
+    saved,
+    active: 'overview',
+    sub: 'สรุปผลงานและรูปทั้งหมดบนเว็บไซต์ของคุณ',
+    actions: html`<a class="button" href="/admin/projects/new">${icon('ph-plus')}เพิ่มผลงาน</a>
+      <a class="button plain" href="/" target="_blank" rel="noopener">${icon('ph-arrow-square-out')}ดูเว็บ</a>`,
+  })
 }
 
 function groupPage(group, saved) {
   const slots = slotRows()
   const keys = Object.keys(group.slots).filter((key) => slots[key])
   return layout(group.title, html`<div class="${group.id === 'hero' ? 'slots-hero' : 'slots'}">
-    ${keys.map((key) => html`<article class="slot">
+    ${keys.map((key) => html`<article class="slot lift">
       <a class="slot-pic" href="/admin/slots/${key}" aria-label="แก้ไข${slots[key].label}">${thumb(slots[key].image, slots[key].alt)}</a>
       <div class="slot-body">
         <h2>${slots[key].label}</h2>
         <p>${group.slots[key]}</p>
-        <div class="slot-actions">${changeButton(slots[key])}<a class="button plain" href="/admin/slots/${key}">${icon('lu-pencil')}แก้คำบรรยาย</a></div>
+        <div class="slot-actions">${changeButton(slots[key])}<a class="button plain" href="/admin/slots/${key}">${icon('ph-pencil-simple')}แก้คำบรรยาย</a></div>
       </div>
     </article>`)}
-  </div>`, { saved, active: group.id })
+  </div>`, { saved, active: group.id, sub: 'กดเปลี่ยนรูปเพื่ออัปโหลดรูปใหม่ หรือแก้คำบรรยายให้ตรงกับรูป' })
 }
 
 function projectsPage(saved) {
   const projects = projectRows()
   return layout('ผลงาน', html`
-    <div class="head"><p>เปิดสวิตช์เพื่อแสดงผลงานบนเว็บ ปิดเพื่อซ่อน</p><a class="button" href="/admin/projects/new">${icon('lu-plus')}เพิ่มผลงาน</a></div>
-    ${projects.length === 0 && html`<p>ยังไม่มีผลงาน</p>`}
+    ${projects.length === 0 && html`<p class="empty card">ยังไม่มีผลงาน</p>`}
     <div class="project-grid">
-      ${projects.map((p) => html`<article class="project">
+      ${projects.map((p) => html`<article class="project lift">
         <a href="/admin/projects/${p.id}">${thumb(p.cover, p.cover_alt)}</a>
         <div class="project-body">
           <a href="/admin/projects/${p.id}">${p.title}</a>
@@ -264,31 +258,35 @@ function projectsPage(saved) {
         </div>
         ${publishSwitch(p, 'list')}
       </article>`)}
-    </div>`, { saved, active: 'projects' })
+    </div>`, {
+    saved,
+    active: 'projects',
+    sub: 'เปิดสวิตช์เพื่อแสดงผลงานบนเว็บ ปิดเพื่อซ่อน',
+    actions: html`<a class="button" href="/admin/projects/new">${icon('ph-plus')}เพิ่มผลงาน</a>`,
+  })
 }
 
-function contactPage(saved, error) {
-  const urls = Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]))
+function contactPage(saved, error, values) {
+  const urls = values ?? Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]))
   return layout('ช่องทางติดต่อ', html`
     ${errorBox(error)}
     <form class="stack narrow" method="post" action="/admin/contact">
-      ${[['line', 'LINE'], ['facebook', 'Facebook'], ['tiktok', 'TikTok']].map(([key, label]) => html`<label class="social-field">
+      ${SOCIALS.map(([key, label]) => html`<label class="social-field">
         <span class="brand-${key}">${icon(key)}${label}</span>
         <input type="url" name="${key}" value="${urls[key]}" placeholder="https://">
       </label>`)}
-      <small>เว้นว่างเพื่อซ่อนปุ่มนั้นจากหน้าเว็บ</small>
       <button>บันทึก</button>
-    </form>`, { saved, active: 'contact' })
+    </form>`, { saved, active: 'contact', sub: 'เว้นว่างเพื่อซ่อนปุ่มนั้นจากหน้าเว็บ' })
 }
 
-function slotPage(slot, { error, replaced } = {}) {
+function slotPage(slot, { error, replaced, alt = slot.alt } = {}) {
   return layout(slot.label, html`
     ${errorBox(error)}
     ${replaced && html`<p class="notice" role="status">เปลี่ยนรูปแล้ว กรุณาตรวจคำบรรยายให้ตรงกับรูปใหม่</p>`}
     <div class="preview">${thumb(slot.image, slot.alt)}</div>
     <form class="stack" method="post" enctype="multipart/form-data">
       <label>เปลี่ยนรูป (ไม่เลือกก็ได้) <input type="file" name="image" accept="${IMAGE_TYPES}"> ${FILE_HINT}</label>
-      <label>คำบรรยายรูป (alt) <input name="alt" value="${slot.alt}" maxlength="160" required></label>
+      <label>คำบรรยายรูป (alt) <input name="alt" value="${alt}" maxlength="160" required></label>
       <button>บันทึก</button>
     </form>`, { active: groupOfSlot(slot.key)?.id })
 }
@@ -296,7 +294,8 @@ function slotPage(slot, { error, replaced } = {}) {
 function projectForm(project, { error, saved } = {}) {
   const isNew = !project.id
   const album = isNew ? [] : db.prepare('SELECT * FROM project_images WHERE project_id = ? ORDER BY sort, id').all(project.id)
-  return layout(isNew ? 'เพิ่มผลงาน' : project.title, html`
+  const savedTitle = isNew ? '' : db.prepare('SELECT title FROM projects WHERE id = ?').get(project.id)?.title
+  return layout(isNew ? 'เพิ่มผลงาน' : savedTitle || 'แก้ไขผลงาน', html`
     ${errorBox(error)}
     ${!isNew && project.cover && html`<div class="preview">${thumb(project.cover, project.cover_alt)}</div>`}
     <form class="stack" method="post" enctype="multipart/form-data" action="${isNew ? '/admin/projects' : `/admin/projects/${project.id}`}">
@@ -332,7 +331,7 @@ function projectForm(project, { error, saved } = {}) {
           ${thumb(r.image, r.alt)}
           <form class="inline" method="post" action="/admin/images/${r.id}">
             <label>คำบรรยายรูป <input name="alt" value="${r.alt}" maxlength="160" required></label>
-            <button>บันทึก</button>
+            <button class="tonal">บันทึก</button>
           </form>
           <div class="actions">
             <form method="post" action="/admin/images/${r.id}/move"><input type="hidden" name="by" value="-1"><button class="plain" ${i === 0 && 'disabled'} aria-label="ย้ายรูปขึ้น">ขึ้น</button></form>
@@ -345,7 +344,7 @@ function projectForm(project, { error, saved } = {}) {
         <h3>เพิ่มรูป</h3>
         <label>ไฟล์รูป <input type="file" name="image" accept="image/jpeg,image/png,image/webp" required> ${FILE_HINT}</label>
         <label>คำบรรยายรูป (alt) <input name="alt" maxlength="160" required></label>
-        <button>เพิ่มรูป</button>
+        <button class="tonal">เพิ่มรูป</button>
       </form>
     </section>
     <section>
@@ -425,7 +424,7 @@ async function postRoutes(req, res, path, form) {
       redirect(res, text(form, 'from') === 'card' ? `/admin/slots/${slot.key}?replaced=1` : `/admin/s/${groupOfSlot(slot.key)?.id}?saved=1`)
     } catch (error) {
       if (!(error instanceof UserError)) throw error
-      send(res, 400, slotPage(slot, { error: error.message }))
+      send(res, 400, slotPage(slot, { error: error.message, alt: text(form, 'alt') }))
     }
     return true
   }
@@ -433,10 +432,13 @@ async function postRoutes(req, res, path, form) {
   if (path === '/admin/contact') {
     const save = db.prepare('UPDATE settings SET value = ? WHERE key = ?')
     const urls = ['line', 'facebook', 'tiktok'].map((key) => [key, text(form, key)])
-    for (const [, value] of urls) {
-      if (value && !URL.parse(value)?.protocol?.startsWith('https')) { send(res, 400, contactPage(false, 'ลิงก์ต้องขึ้นต้นด้วย https://')); return true }
+    // Store the parsed href: it percent-encodes quotes and brackets, so the link is always one clean attribute.
+    const parsed = urls.map(([, value]) => value && URL.parse(value))
+    if (parsed.some((url, i) => urls[i][1] && (url?.protocol !== 'https:' || !url.hostname.includes('.')))) {
+      send(res, 400, contactPage(false, 'ลิงก์ต้องขึ้นต้นด้วย https:// และเป็นที่อยู่เว็บที่ถูกต้อง', Object.fromEntries(urls)))
+      return true
     }
-    for (const [key, value] of urls) save.run(value, key)
+    urls.forEach(([key], i) => save.run(parsed[i] ? parsed[i].href : '', key))
     redirect(res, '/admin/contact?saved=1')
     return true
   }
@@ -549,15 +551,21 @@ function getRoutes(res, path, saved, replaced) {
   return false
 }
 
-// Returns false when no admin route matches, so the caller can answer 404.
+function notFound(res) {
+  send(res, 404, layout('ไม่พบหน้านี้', html`<p class="empty card">หน้านี้ไม่มีอยู่หรือถูกลบไปแล้ว <a href="/admin">กลับไปหน้าภาพรวม</a></p>`))
+  return true
+}
+
+// Returns false only before login (the login route with an unknown method), so the caller can answer 404.
 export async function handleAdmin(req, res, url) {
   const path = url.pathname
   const token = cookie(req, 'sid')
 
   if (req.method === 'POST') {
     // SameSite=Strict already blocks forged posts in browsers; this also covers older clients.
-    const origin = req.headers.origin
-    if (origin && new URL(origin).host !== req.headers.host) { send(res, 403, 'ปฏิเสธคำขอจากเว็บอื่น'); return true }
+    // Without Origin the Referer is checked instead; a request with neither is let through.
+    const source = req.headers.origin ?? req.headers.referer
+    if (source !== undefined && URL.parse(source)?.host !== req.headers.host) { send(res, 403, 'ปฏิเสธคำขอจากเว็บอื่น'); return true }
   }
 
   if (path === '/admin/login') {
@@ -567,12 +575,12 @@ export async function handleAdmin(req, res, url) {
       return true
     }
     if (req.method !== 'POST') return false
-    const ip = req.socket.remoteAddress
+    const ip = clientIp(req)
     if (loginBlocked(ip)) { send(res, 429, loginPage('ลองเข้าสู่ระบบผิดหลายครั้ง กรุณารอ 15 นาที')); return true }
     const form = await readForm(req)
     const session = await login(text(form, 'email'), String(form.get('password') ?? ''), ip)
     if (session) redirect(res, '/admin', { 'Set-Cookie': sessionCookie(session) })
-    else send(res, 401, loginPage('อีเมลหรือรหัสผ่านไม่ถูกต้อง'))
+    else send(res, 401, loginPage('อีเมลหรือรหัสผ่านไม่ถูกต้อง', text(form, 'email')))
     return true
   }
 
@@ -582,8 +590,8 @@ export async function handleAdmin(req, res, url) {
     return true
   }
 
-  if (req.method === 'GET') return getRoutes(res, path, url.searchParams.has('saved'), url.searchParams.has('replaced'))
-  if (req.method !== 'POST') return false
+  if (req.method === 'GET') return getRoutes(res, path, url.searchParams.has('saved'), url.searchParams.has('replaced')) || notFound(res)
+  if (req.method !== 'POST') return notFound(res)
 
   if (path === '/admin/logout') {
     req.resume()
@@ -592,7 +600,7 @@ export async function handleAdmin(req, res, url) {
     return true
   }
   try {
-    return await postRoutes(req, res, path, await readForm(req))
+    return await postRoutes(req, res, path, await readForm(req)) || notFound(res)
   } catch (error) {
     if (!(error instanceof UserError)) throw error
     send(res, 400, layout('บันทึกไม่สำเร็จ', html`${errorBox(error.message)}<a href="/admin">กลับหน้าจัดการ</a>`))

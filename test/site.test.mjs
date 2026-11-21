@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { crc32 } from 'node:zlib'
 import { after, before, test } from 'node:test'
 import sharp from 'sharp'
 
@@ -192,6 +193,109 @@ test('assets revalidate so an update reaches returning visitors', async () => {
 test('file routes cannot leave their folders', async () => {
   assert.equal((await get('/uploads/..%2f..%2f.env')).status, 404)
   assert.equal((await get('/assets/..%2f..%2fserver.mjs')).status, 404)
+})
+
+test('failed saves keep what the admin typed', async () => {
+  const wrong = await post('/admin/login', { email: 'me+x@test.example"><b>', password: 'wrong' }, {})
+  const loginHtml = await wrong.text()
+  assert.match(loginHtml, /value="me\+x@test\.example&quot;&gt;&lt;b&gt;"/)
+  assert.doesNotMatch(loginHtml, /value="wrong"/)
+
+  assert.equal((await post('/admin/projects', project({ slug: 'keep-typed' }))).status, 303)
+  const { id, title } = db.prepare("SELECT id, title FROM projects WHERE slug = 'keep-typed'").get()
+  const blank = await post(`/admin/projects/${id}`, project({ slug: 'keep-typed', title: '   ' }))
+  assert.equal(blank.status, 400)
+  assert.match(await blank.text(), new RegExp(`<h1>${title}</h1>`))
+
+  const slot = await post('/admin/slots/hero', { alt: 'x'.repeat(161) })
+  assert.equal(slot.status, 400)
+  const slotHtml = await slot.text()
+  assert.match(slotHtml, /role="alert"/)
+  assert.match(slotHtml, new RegExp(`name="alt" value="x{161}"`))
+
+  const contact = await post('/admin/contact', { line: 'httpsx://example.com', facebook: 'https://facebook.com/typed', tiktok: '' })
+  assert.equal(contact.status, 400)
+  const contactHtml = await contact.text()
+  assert.match(contactHtml, /name="line" value="httpsx:\/\/example\.com"/)
+  assert.match(contactHtml, /name="facebook" value="https:\/\/facebook\.com\/typed"/)
+  assert.match(contactHtml, /name="tiktok" value=""/)
+})
+
+test('narrow screens keep the add button on one line', async () => {
+  const css = await (await get('/assets/admin.css')).text()
+  assert.match(css, /white-space: nowrap/)
+  assert.match(css, /\.head \{ flex-direction: column/)
+})
+
+test('posts with a bad Origin or a foreign Referer are refused', async () => {
+  const headers = (extra) => ({ Cookie: `sid=${sid}`, ...extra })
+  assert.equal((await post('/admin/projects', project(), headers({ Origin: 'null' }))).status, 403)
+  assert.equal((await post('/admin/projects', project(), headers({ Origin: 'not a url' }))).status, 403)
+  assert.equal((await post('/admin/projects', project(), headers({ Referer: 'https://evil.example/x' }))).status, 403)
+  const ok = await post('/admin/contact', { line: '', facebook: '', tiktok: '' }, headers({ Referer: `${base}/admin/contact` }))
+  assert.equal(ok.status, 303)
+})
+
+test('corrupt or oversized pictures are refused without leaving files', async () => {
+  const before = uploads()
+  const truncated = new File([jpeg.subarray(0, jpeg.length / 3)], 'cut.jpg', { type: 'image/jpeg' })
+  const cut = await post('/admin/slots/hero', { alt: 'รูปเสีย', image: truncated })
+  assert.equal(cut.status, 400)
+  assert.match(await cut.text(), /ไฟล์รูปเสีย/)
+  // A tiny PNG whose header claims 10000 x 6000 pixels
+  const png = Buffer.from(await sharp({ create: { width: 2, height: 2, channels: 3, background: '#476' } }).png().toBuffer())
+  png.writeUInt32BE(10000, 16)
+  png.writeUInt32BE(6000, 20)
+  png.writeUInt32BE(crc32(png.subarray(12, 29)), 29)
+  const big = await post('/admin/slots/hero', { alt: 'รูปใหญ่', image: new File([png], 'big.png', { type: 'image/png' }) })
+  assert.equal(big.status, 400)
+  assert.match(await big.text(), /ใหญ่เกินไป/)
+  // Past sharp's own 268 MP default the size message must still win over the format one
+  png.writeUInt32BE(20000, 16)
+  png.writeUInt32BE(20000, 20)
+  png.writeUInt32BE(crc32(png.subarray(12, 29)), 29)
+  const huge = await post('/admin/slots/hero', { alt: 'รูปใหญ่มาก', image: new File([png], 'huge.png', { type: 'image/png' }) })
+  assert.equal(huge.status, 400)
+  assert.match(await huge.text(), /ใหญ่เกินไป/)
+  assert.equal(uploads(), before)
+})
+
+test('contact links must be real https addresses and are stored normalised', async () => {
+  const fields = { line: '', facebook: '', tiktok: '' }
+  assert.equal((await post('/admin/contact', { ...fields, line: 'https:alert(1)' })).status, 400)
+  assert.equal((await post('/admin/contact', { ...fields, line: 'https://ok/"><script>' })).status, 400)
+  assert.equal((await post('/admin/contact', { ...fields, line: 'HTTPS://Line.ME/ti/p/"x"' })).status, 303)
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'line'").get().value, 'https://line.me/ti/p/%22x%22')
+})
+
+test('admin 404 pages carry the admin security headers', async () => {
+  for (const path of ['/admin/nope', '/admin/projects/9999']) {
+    const res = await get(path, { Cookie: `sid=${sid}` })
+    assert.equal(res.status, 404, path)
+    assert.match(res.headers.get('content-security-policy'), /default-src 'self'/)
+    assert.equal(res.headers.get('cache-control'), 'no-store')
+    assert.equal(res.headers.get('x-frame-options'), 'DENY')
+    const page = await res.text()
+    assert.match(page, /<h1>ไม่พบหน้านี้<\/h1>/)
+    assert.match(page, /class="side"/)
+    assert.doesNotMatch(page, /ผลงานนี้อาจถูกย้าย/)
+  }
+})
+
+test('on Render the login lock follows the client address the proxy appended', async () => {
+  process.env.RENDER = 'true'
+  try {
+    const login = (password, forwarded) => post('/admin/login', { email: EMAIL, password }, { 'X-Forwarded-For': forwarded })
+    for (let i = 0; i < 5; i++) await login('nope', `10.0.0.${i}, 203.0.113.7`)
+    // Spoofing the leftmost entry does not escape the lock
+    assert.equal((await login(PASSWORD, '198.51.100.1, 203.0.113.7')).status, 429)
+    assert.equal((await login(PASSWORD, '203.0.113.7, 203.0.113.8')).status, 303)
+  } finally {
+    delete process.env.RENDER
+  }
+  // Off Render the header is ignored, so it cannot be used to dodge the lock either
+  for (let i = 0; i < 5; i++) await post('/admin/login', { email: EMAIL, password: 'nope' }, { 'X-Forwarded-For': '203.0.113.7' })
+  assert.equal((await post('/admin/login', { email: EMAIL, password: PASSWORD }, { 'X-Forwarded-For': '198.51.100.9' })).status, 429)
 })
 
 test('repeated wrong passwords lock the login', async () => {

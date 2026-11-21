@@ -3,7 +3,7 @@ import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { handleAdmin } from './src/admin.mjs'
+import { handleAdmin, SECURITY_HEADERS } from './src/admin.mjs'
 import { DATA_DIR, db, UPLOAD_DIR } from './src/db.mjs'
 import { escapeHtml } from './src/html.mjs'
 import { homePage, notFoundPage, projectPage, robotsTxt, sitemapXml } from './src/site.mjs'
@@ -37,6 +37,7 @@ async function handle(req, res) {
 
   if (path === '/admin' || path.startsWith('/admin/')) {
     if (await handleAdmin(req, res, url)) return
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value)
     return sendPage(req, res, 404, notFoundPage())
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
