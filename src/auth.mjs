@@ -28,8 +28,15 @@ export function setAdminPassword(email, passwordHash) {
   db.prepare('DELETE FROM sessions WHERE admin_id = (SELECT id FROM admins WHERE email = ?)').run(email)
 }
 
-// shortcut: counts in memory per socket address, so behind a reverse proxy it limits all visitors
-// together and it resets on restart; read the proxy's client IP header when deploying behind one.
+// Render's proxy appends the real client to X-Forwarded-For, so only its last entry can be trusted;
+// anywhere else the header is ignored because any client could set it.
+export function clientIp(req) {
+  const forwarded = process.env.RENDER && req.headers['x-forwarded-for']
+  return forwarded ? forwarded.split(',').at(-1).trim() : req.socket.remoteAddress
+}
+
+// shortcut: counts in memory, so it resets on restart; behind a proxy other than Render it sees the
+// proxy's address and limits all visitors together, so extend clientIp() when moving hosts.
 export function loginBlocked(ip) {
   const entry = fails.get(ip)
   if (entry && entry.until < Date.now()) fails.delete(ip)

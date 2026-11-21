@@ -6,6 +6,9 @@ import { UPLOAD_DIR } from './db.mjs'
 
 const WIDTHS = [480, 960, 1600]
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+// About 150 MB once decoded, which the 512 MB host can afford; a 48 MP phone photo still fits.
+const MAX_PIXELS = 50_000_000
+const decode = (bytes) => sharp(bytes, { limitInputPixels: MAX_PIXELS })
 
 export class UserError extends Error {}
 
@@ -19,17 +22,25 @@ export async function saveImage(file, baseName) {
   if (file.size > MAX_IMAGE_BYTES) throw new UserError('ไฟล์รูปต้องไม่เกิน 8 MB')
 
   const bytes = Buffer.from(await file.arrayBuffer())
-  const format = await sharp(bytes).metadata().then((m) => m.format, () => null)
-  if (!['jpeg', 'png', 'webp'].includes(format)) throw new UserError('รองรับเฉพาะไฟล์ JPG, PNG และ WebP')
+  // Header only, so no pixel limit here; a limit would turn a too-large image into a wrong-format message.
+  const meta = await sharp(bytes, { limitInputPixels: false }).metadata().catch(() => null)
+  if (!['jpeg', 'png', 'webp'].includes(meta?.format)) throw new UserError('รองรับเฉพาะไฟล์ JPG, PNG และ WebP')
+  if (meta.width * meta.height > MAX_PIXELS) throw new UserError('รูปมีขนาดพิกเซลใหญ่เกินไป กรุณาย่อรูปให้ไม่เกิน 50 ล้านพิกเซล')
 
   const name = `${slugify(baseName)}-${randomBytes(4).toString('hex')}`
-  for (const width of WIDTHS) {
-    await sharp(bytes).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 80 })
-      .toFile(join(UPLOAD_DIR, `${name}-${width}.webp`))
+  try {
+    for (const width of WIDTHS) {
+      await decode(bytes).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 80 })
+        .toFile(join(UPLOAD_DIR, `${name}-${width}.webp`))
+    }
+    // JPEG because not every link preview bot reads WebP.
+    await decode(bytes).rotate().resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 82 })
+      .toFile(join(UPLOAD_DIR, `${name}-og.jpg`))
+  } catch {
+    // The header was readable but the pixels were not: remove whatever sizes were already written.
+    await deleteImage(name)
+    throw new UserError('ไฟล์รูปเสียหรือไม่สมบูรณ์ กรุณาลองไฟล์อื่น')
   }
-  // JPEG because not every link preview bot reads WebP.
-  await sharp(bytes).rotate().resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 82 })
-    .toFile(join(UPLOAD_DIR, `${name}-og.jpg`))
   return name
 }
 
