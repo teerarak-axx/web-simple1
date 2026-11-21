@@ -10,9 +10,13 @@
     "seed": "node --env-file-if-exists=.env seed/seed.mjs",
     "admin": "node --env-file-if-exists=.env scripts/admin.mjs",
     "render-start": "npm run seed || true; npm run admin && npm start",
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
   }
 }
