@@ -111,13 +111,13 @@ test('a project moves through add, hide and delete', async () => {
 
   assert.equal((await post(`${adminPath}/images`, { image: imageFile(), alt: 'รูปหนึ่ง' })).status, 303)
   assert.equal((await post(`${adminPath}/images`, { image: imageFile(), alt: 'รูปสอง' })).status, 303)
-  assert.equal(uploads(), start + 12)
+  assert.equal(uploads(), start + 15)
 
   const [first, second] = db.prepare('SELECT id FROM project_images ORDER BY sort').all()
   assert.equal((await post(`/admin/images/${second.id}/move`, { by: '-1' })).status, 303)
   assert.equal(db.prepare('SELECT id FROM project_images ORDER BY sort').all()[0].id, second.id)
   assert.equal((await post(`/admin/images/${first.id}/delete`)).status, 303)
-  assert.equal(uploads(), start + 8)
+  assert.equal(uploads(), start + 10)
 
   const { cover: _, published: __, ...kept } = project({ title: 'สวนทดสอบ' })
   assert.equal((await post(adminPath, kept)).status, 303)

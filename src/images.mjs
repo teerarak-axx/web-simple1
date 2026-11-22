@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import { UPLOAD_DIR } from './db.mjs'
 
-const WIDTHS = [480, 960, 1600]
+const WIDTHS = [480, 960, 1600, 2000]
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 // About 150 MB once decoded, which the 512 MB host can afford; a 48 MP phone photo still fits.
 const MAX_PIXELS = 50_000_000
@@ -30,7 +30,7 @@ export async function saveImage(file, baseName) {
   const name = `${slugify(baseName)}-${randomBytes(4).toString('hex')}`
   try {
     for (const width of WIDTHS) {
-      await decode(bytes).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 80 })
+      await decode(bytes).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 90 })
         .toFile(join(UPLOAD_DIR, `${name}-${width}.webp`))
     }
     // JPEG because not every link preview bot reads WebP.
