@@ -16,7 +16,7 @@ const load = async (file) => new File([await readFile(join(DIR, file))], file)
 const SLOTS = [
   ['logo', 'โลโก้', 'logo-rain-tree.png', 'โลโก้เงาไม้ การ์เด้น'],
   ['hero', 'สไลด์หน้าแรก 1', 'hero-rain-tree-teak-house.jpg', 'ต้นจามจุรีใหญ่ให้ร่มหน้าเรือนไม้สักบนสนามหญ้า'],
-  ['hero_2', 'สไลด์หน้าแรก 2', 'mae-rim-teak-house-courtyard.jpg', 'ลานสวนเฟิร์นและอ่างหินหน้าเรือนไม้สัก'],
+  ['hero_2', 'สไลด์หน้าแรก 2', 'night-villa-garden-pool.webp', 'บ้านสมัยใหม่ยามค่ำคืนในสวนเขตร้อน มีบ่อน้ำสะท้อนแสงไฟและทางเดินหิน'],
   ['hero_3', 'สไลด์หน้าแรก 3', 'khao-yai-stone-court-house.jpg', 'บ้านปูนเปลือยกับลานหินและหญ้าประดับ'],
   ['about', 'เกี่ยวกับเรา', 'intro-frangipani-path.jpg', 'ทางเดินหินใต้ต้นลีลาวดี เงาใบไม้ตกบนผนังปูนขาว'],
   ['quote', 'ข้างคำคม', 'intro-leaf-shadow-tiles.jpg', 'เงาใบไม้บนพื้นดินเผากับขอบม้านั่งไม้สัก'],
